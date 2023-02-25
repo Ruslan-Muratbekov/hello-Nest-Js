@@ -1,24 +1,35 @@
 import {
   BadRequestException,
   ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+  Injectable
+} from "@nestjs/common";
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { UsersService } from 'src/users/users.service';
 import * as argon2 from 'argon2';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthDto } from './dto/auth.dto';
+import * as nodemailer from 'nodemailer'
+import * as uuid from 'uuid'
 
 @Injectable()
 export class AuthService {
+
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: `${process.env.SMTP_USERS}`,
+      pass: `${process.env.SMTP_PASSWORD}`
+    }
+  })
+
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
     private configService: ConfigService,
   ) {}
+
   async signUp(createUserDto: CreateUserDto): Promise<any> {
-    // Check if user exists
     const userExists = await this.usersService.findByUsername(
       createUserDto.email,
     );
@@ -26,19 +37,20 @@ export class AuthService {
       throw new BadRequestException('User already exists');
     }
 
-    // Hash password
     const hash = await this.hashData(createUserDto.password);
+    const activatedLink = uuid.v4()
     const newUser = await this.usersService.create({
       ...createUserDto,
       password: hash,
+      activatedLink
     });
+    await this.sendActivationMail(createUserDto.email, `http://localhost:3000/auth/activated/${activatedLink}`)
     const tokens = await this.getTokens(newUser._id, newUser.email);
     await this.updateRefreshToken(newUser._id, tokens.refreshToken);
     return tokens;
   }
 
   async signIn(data: AuthDto) {
-    // Check if user exists
     const user = await this.usersService.findByUsername(data.email);
     if (!user) throw new BadRequestException('User does not exist');
     const passwordMatches = await argon2.verify(user.password, data.password);
@@ -47,6 +59,15 @@ export class AuthService {
     const tokens = await this.getTokens(user._id, user.email);
     await this.updateRefreshToken(user._id, tokens.refreshToken);
     return tokens;
+  }
+
+  async activated(activatedLink){
+    const candidate = await this.usersService.findByLink(activatedLink)
+    if(candidate){
+      candidate.isActivated = true
+      return candidate.save()
+    }
+    throw new BadRequestException()
   }
 
   async logout(userId: string) {
@@ -87,7 +108,7 @@ export class AuthService {
         },
         {
           secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
-          expiresIn: '15m',
+          expiresIn: '30m',
         },
       ),
       this.jwtService.signAsync(
@@ -107,4 +128,19 @@ export class AuthService {
       refreshToken,
     };
   }
+
+  async sendActivationMail(to, link){
+    await this.transporter.sendMail({
+      from: process.env.SMTP_USERS,
+      to,
+      subject: `Активация аккаунта на ${process.env.API_URL}`,
+      text: '',
+      html: `
+			<div>
+					<h1>Для активации перейдите по ссылке</h1>
+					<a href="${link}">${link}</a>	
+			</div>`
+    })
+  }
+
 }

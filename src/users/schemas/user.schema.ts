@@ -15,7 +15,7 @@ export class User {
   refreshToken: string;
 
   @Prop({type: Boolean, default: false})
-  isActivated: string;
+  isActivated: boolean;
 
   @Prop({type: String, unique: true})
   activatedLink: string;
